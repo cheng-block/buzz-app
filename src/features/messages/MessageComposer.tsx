@@ -265,6 +265,42 @@ function recoveryFor(session: ComposerSession) {
   return recovery;
 }
 
+export const soloModelPicksKey = (channelId: string) =>
+  `solo:model-picks:${channelId}`;
+
+export function readSoloModelPicks(scope: string, key: string): DraftPicks {
+  const saved = readView<unknown>(scope, key, null);
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+  return Object.fromEntries(
+    Object.entries(saved).flatMap(([pubkey, pick]) => {
+      if (
+        !/^[0-9a-f]{64}$/.test(pubkey) ||
+        !pick ||
+        typeof pick !== "object" ||
+        Array.isArray(pick)
+      )
+        return [];
+      const record = pick as Record<string, unknown>;
+      const model = typeof record.model === "string" ? record.model : undefined;
+      const effort =
+        typeof record.effort === "string" ? record.effort : undefined;
+      const type = typeof record.type === "string" ? record.type : undefined;
+      return model || effort
+        ? [
+            [
+              pubkey,
+              {
+                ...(model ? { model } : {}),
+                ...(effort ? { effort } : {}),
+                ...(type ? { type } : {}),
+              },
+            ],
+          ]
+        : [];
+    }),
+  );
+}
+
 export type MessageComposerProps = {
   extensions?: ConversationExtensions | undefined;
   scope: string;
@@ -322,6 +358,8 @@ export type MessageComposerProps = {
     attachments?: boolean;
     /** DMs can start with files alone; named Solo chats still require text. */
     allowAttachmentOnly?: boolean;
+    /** New Solo chats keep their picks on the stable draft until creation. */
+    modelPicksKey?: string;
     /** Told after each save whether the editor holds a draft it could not
      * save, which view state then misses. */
     unsaved?: ((held: boolean) => void) | undefined;
@@ -330,6 +368,8 @@ export type MessageComposerProps = {
       draft: MentionDraft,
       attachments: AttachmentDraft,
       addressed?: readonly MentionRecipient[],
+      picks?: MentionPicks,
+      draftPicks?: DraftPicks,
     ) => void;
   };
 };
@@ -696,8 +736,58 @@ function Composer({
     session.agentChoices.snapshot,
     session.agentChoices.snapshot,
   );
-  // Model and effort picked for mentioned agents' next run; cleared by each send.
-  const [picks, setPicks] = useState<DraftPicks>({});
+  // A Solo chat keeps its explicit model/effort picks across turns and mounts.
+  const stickyPicks = !!ownSoloConversation;
+  const stickyPicksKey =
+    submission?.modelPicksKey ?? soloModelPicksKey(channelId);
+  const [picks, setPicks] = useState<DraftPicks>(() =>
+    stickyPicks ? readSoloModelPicks(scope, stickyPicksKey) : {},
+  );
+  const picksRef = useRef(picks);
+  const picksRevision = useRef(viewRevision(scope, stickyPicksKey));
+  const [pickStorageFailed, setPickStorageFailed] = useState(false);
+  useEffect(() => {
+    if (!stickyPicks) return;
+    return subscribeView(scope, () => {
+      const revision = viewRevision(scope, stickyPicksKey);
+      if (revision === undefined || revision === picksRevision.current) return;
+      picksRevision.current = revision;
+      const next = readSoloModelPicks(scope, stickyPicksKey);
+      picksRef.current = next;
+      setPicks(next);
+      setPickStorageFailed(false);
+    });
+  }, [scope, stickyPicks, stickyPicksKey]);
+  const changePicks = (next: DraftPicks) => {
+    const before = picksRef.current;
+    const changedKeys = new Set([...Object.keys(before), ...Object.keys(next)]);
+    for (const pubkey of [...changedKeys])
+      if (JSON.stringify(before[pubkey]) === JSON.stringify(next[pubkey]))
+        changedKeys.delete(pubkey);
+    let merged = next;
+    if (stickyPicks) {
+      // Composer edits are per-agent. Rebase them onto the latest saved map so
+      // a stale window cannot erase another agent's more recent preference.
+      const revision = viewRevision(scope, stickyPicksKey);
+      const saved =
+        revision === undefined
+          ? before
+          : readSoloModelPicks(scope, stickyPicksKey);
+      const updated: Record<string, DraftPicks[string]> = { ...saved };
+      for (const pubkey of changedKeys) {
+        if (next[pubkey]) updated[pubkey] = next[pubkey];
+        else delete updated[pubkey];
+      }
+      merged = updated;
+    }
+    picksRef.current = merged;
+    setPicks(merged);
+    if (stickyPicks) {
+      const saved = writeView(scope, stickyPicksKey, merged);
+      picksRevision.current = viewRevision(scope, stickyPicksKey);
+      setPickStorageFailed(!saved);
+    }
+  };
   // Solo, alone with agents: the toolbar holds who hears the message when its
   // text mentions no one, and always keeps at least one agent.
   const [routed, setRouted] = useState<readonly MentionRecipient[]>([]);
@@ -706,7 +796,7 @@ function Composer({
   const [replacedKey, setReplacedKey] = useState<string>();
   const replaced = replacedKey === draftKey;
   const mentionCount = useRef(0);
-  const resolvedPicks = useRef<MentionPicks>({});
+  const resolvedPicks = useRef<MentionPicks | null>({});
   const agents = useContext(AgentsContext);
   /** Who a draft may address here now, the owner's agents from their other
    * communities included. */
@@ -2325,6 +2415,12 @@ function Composer({
       setConflict(true);
       return;
     }
+    if (stickyPicks && resolvedPicks.current === null) {
+      setError(
+        "Saved model and effort choices are still loading. Try sending again shortly.",
+      );
+      return;
+    }
     const savedRevision = revision.current;
     const attempt = new AbortController();
     sendAttempt.current = attempt;
@@ -2332,7 +2428,9 @@ function Composer({
     const capturedRecipients = routing ? recipientsNow : captured.recipients;
     const capturedAttachments = attachments.store.snapshot();
     const capturedPicks = picks;
-    const capturedRunPicks = { ...picks, ...resolvedPicks.current };
+    const capturedRunPicks = stickyPicks
+      ? { ...(resolvedPicks.current ?? {}) }
+      : { ...picks, ...(resolvedPicks.current ?? {}) };
     // A send is an agent follow-up unless it addresses a confirmed person
     // (a loaded, non-agent profile). Those, and untagged conversation in a
     // shared chat, go out now; recipients still being classified keep the
@@ -2382,10 +2480,13 @@ function Composer({
           "Only your available agents can be mentioned in Solo chats. Remove the unavailable recipient and retry.",
         );
       if (submission) {
+        // SoloDraft filters the captured choices against its final recipient set.
         submission.submit(
           captured,
           attachments.store,
           routing ? capturedRecipients : undefined,
+          ownSoloConversation ? capturedRunPicks : undefined,
+          ownSoloConversation ? capturedPicks : undefined,
         );
         return;
       }
@@ -2728,7 +2829,7 @@ function Composer({
         setReplacedKey(undefined);
         keepPick(null);
       }
-      setPicks({});
+      if (!stickyPicks) setPicks({});
       // An unchanged prefill may not render. Do not leave a caret command for
       // the next keystroke to consume after inserting its first character.
       caret.current = changed ? followUp.text.length : undefined;
@@ -3270,7 +3371,7 @@ function Composer({
             )}
             {active &&
               !editing.target &&
-              !submission &&
+              (!submission || ownSoloConversation) &&
               !!addressedKeys.length && (
                 <ComposerModels
                   profiles={session.profiles}
@@ -3278,7 +3379,9 @@ function Composer({
                   pubkeys={addressedKeys}
                   value={picks}
                   disabled={editingDisabled}
-                  onChange={setPicks}
+                  resettable={stickyPicks}
+                  explicitOnly={!!submission && stickyPicks}
+                  onChange={changePicks}
                   onResolved={(next) => {
                     resolvedPicks.current = next;
                   }}
@@ -3350,6 +3453,12 @@ function Composer({
         )}
         {(error || editing.error) && (
           <p role="alert">{error ?? editing.error}</p>
+        )}
+        {pickStorageFailed && (
+          <p role="alert">
+            Could not save model and effort for this chat on this device. The
+            current choices remain until this composer closes.
+          </p>
         )}
         {!editing.target &&
           !submission &&

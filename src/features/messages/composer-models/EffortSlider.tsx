@@ -16,6 +16,7 @@ import styles from "../ComposerModels.module.css";
 export function EffortSlider({
   avatarSrc,
   name,
+  chatScoped,
   model,
   efforts,
   resting,
@@ -25,6 +26,7 @@ export function EffortSlider({
   thumb,
 }: {
   name: string;
+  chatScoped?: boolean;
   avatarSrc: string | undefined;
   model(level?: string): ReactNode;
   efforts: readonly Effort[];
@@ -125,7 +127,11 @@ export function EffortSlider({
                 "calc(var(--thumb-width) / 2 + var(--composer-effort-position) * (100% - var(--thumb-width)))",
             }}
             inputRef={thumb}
-            aria-label={`Effort for ${name}'s next run`}
+            aria-label={
+              chatScoped
+                ? `Effort for ${name} in this chat`
+                : `Effort for ${name}'s next run`
+            }
             getAriaValueText={() => level}
           >
             <span
