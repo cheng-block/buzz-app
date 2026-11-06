@@ -5,8 +5,11 @@ import { mediaCornerPath } from "./media-corners";
 export function useMediaCorners() {
   return useCallback((element: HTMLElement | null) => {
     if (!element || typeof ResizeObserver === "undefined") return;
-    const sync = () => {
-      const { offsetWidth: width, offsetHeight: height } = element;
+    const sync = (entries?: ResizeObserverEntry[]) => {
+      // The entry's box needs no layout read; Safari before 15.4 omits it.
+      const box = entries?.[0]?.borderBoxSize?.[0];
+      const width = box?.inlineSize ?? element.offsetWidth;
+      const height = box?.blockSize ?? element.offsetHeight;
       if (!width || !height) return;
       const radius = Number.parseFloat(
         getComputedStyle(element).borderTopLeftRadius,
@@ -21,7 +24,8 @@ export function useMediaCorners() {
         ?.setAttribute("d", path);
       element.dataset.smoothCorners = "";
     };
-    sync();
+    // Measuring in this ref callback would force layout during React's commit;
+    // the first notification still arrives after layout and before paint.
     const observer = new ResizeObserver(sync);
     observer.observe(element);
     return () => {
