@@ -93,6 +93,31 @@ it("reports clipboard refusal without claiming success and allows retry", async 
   expect(writeText).toHaveBeenCalledTimes(2);
 });
 
+it("the hint names the host the row can truncate until a copy confirms", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("navigator", {
+    clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
+  render(
+    <CommunityAddress
+      communities={communities}
+      community={{ id: "https://community.example", name: "Community" }}
+    />,
+  );
+  const button = screen.getByRole("button", {
+    name: "Copy community URL, community.example",
+  });
+  fireEvent.mouseEnter(button);
+  fireEvent.mouseMove(button);
+  act(() => vi.advanceTimersByTime(HELPFUL_HINT_REST_MS));
+  expect(screen.getByRole("tooltip")).toHaveTextContent(
+    /^Copy community\.example$/,
+  );
+  fireEvent.pointerDown(button, { pointerType: "mouse" });
+  await act(async () => fireEvent.click(button));
+  expect(screen.getByRole("tooltip")).toHaveTextContent(/^Copied$/);
+});
+
 it("a click before the hint rests confirms once, by toast", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("navigator", {

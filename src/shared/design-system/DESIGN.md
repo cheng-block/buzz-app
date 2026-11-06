@@ -495,7 +495,8 @@ Top-bar pills and picker options are not sidebar rows and keep their own recipes
 Omit NavigationSection’s `label` for a headingless reference group: it keeps
 ordinary section separation without an empty heading and spans the wrapped
 navigation grid. Settings places its community URL copy action there above
-“Community”; the action keeps its pointer Copy hint and never selects a destination.
+“Community”; the action keeps its pointer Copy hint, naming the host the row can
+truncate, and never selects a destination.
 
 Panel navigation uses `affordance-panel-hover` for its quiet hover and the shared
 `affordance-selected` for persistent selection. In dark mode, the unfilled panel
@@ -1389,8 +1390,9 @@ initiating click does not dismiss its result. Defaults retain ordinary hint beha
 `follow="pointer"` attaches a compact, non-interactive hint below/right of the native
 pointer using Base UI cursor tracking and collision handling; keyboard focus uses
 its trigger anchor. Do not replace or hide the system cursor, spring the tracking,
-or include full URLs in the pointer chip. Clipboard actions show “Copy”, then a
-check and “Copied” while hovered/focused; keep screen-reader status and touch toast
+or include full URLs in the pointer chip. Clipboard actions show “Copy” (naming the
+value when their trigger can truncate it), then a check and “Copied” while
+hovered/focused; keep screen-reader status and touch toast
 feedback with the action owner. Pointer offsets clear the physical cursor silhouette
 rather than following text-scale spacing. Real pointer geometry needs browser/native
 inspection; DOM tests do not establish placement.

@@ -98,7 +98,7 @@ function CopyAddress({
               <CheckIcon size={12} aria-hidden="true" /> Copied
             </>
           ) : (
-            "Copy"
+            `Copy ${host}`
           )
         }
         follow="pointer"
